@@ -1,0 +1,36 @@
+apiVersion: serving.knative.dev/v1
+kind: Service
+metadata:
+  name: springboot-app
+  labels:
+    cloud.googleapis.com/location: europe-west1
+  annotations:
+spec:
+  template:
+    metadata:
+      annotations:
+        autoscaling.knative.dev/maxScale: '3'
+    spec:
+      containerConcurrency: 80
+      timeoutSeconds: 600
+      serviceAccountName: SA_NAME
+      containers:
+      - image: gcr.io/GCP_PROJECT/gcp-sb-training-app
+        ports:
+        - containerPort: 8085
+        env:
+        - name: INSTANCE_CONNECTION
+          value: DATABASE_CONNECTION
+        - name: DATABASE_NAME
+          value: DB_NAME
+        - name: DB_USER
+          value: USERNAME
+        - name: DB_PASSWORD
+          value: PASS_DB
+        resources:
+          limits:
+            cpu: 2000m
+            memory: 2048Mi
+  traffic:
+  - percent: 100
+    latestRevision: true
