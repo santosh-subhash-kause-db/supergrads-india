@@ -36,14 +36,18 @@ Create a database using your mysql shell(downloaded and installed as a part of w
 
 ![MYSQL SHELL](/assets/mysqlshell.JPG)
 
-Replace the database details in your directory where you have cloned code at visitcount\src\main\resources\application-dev.properties
+Clone the code to your local machine using command
+```bash
+git clone https://github.com/git-dev-eng/supergrads-india.git
+```
+
+Replace the database details in your directory where you have cloned code at services\src\main\resources\application-dev.properties
 
 ![Application Properties](/assets/app-properties.JPG)
 
-Run the following commands in Git Bash once the above mentioned prerequisites are all set:
+Run the following commands in Git Bash at root of your repo you cloned previously, once the above mentioned prerequisites are all set:
 
 ```bash
-git clone <Link-to-this-repo>
 cd services
 mvn clean package -Pdev
 java -jar target/visitcount-0.0.1-SNAPSHOT.jar --spring.profiles.active=dev
