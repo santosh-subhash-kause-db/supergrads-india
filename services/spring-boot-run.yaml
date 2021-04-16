@@ -29,8 +29,8 @@ spec:
           value: 'PASS_DB'
         resources:
           limits:
-            cpu: 2000m
-            memory: 2048Mi
+            cpu: 1000m
+            memory: 512Mi
   traffic:
   - percent: 100
     latestRevision: true
