@@ -1,0 +1,119 @@
+name: Build and Deploy to Google Cloud Run
+
+# Triggers to run the workflow on. Here set on push to a branch and manual trigger(workflow_dispatch adds the manual trigger)
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+# Environment Variables available to the entire flow.
+env:
+  BACKEND_SERVICE_NAME: springboot-app
+  FRONTEND_SERVICE_NAME: react-app  
+  GCP_PROJECT: ${{ secrets.GCP_PROJECT_ID }}
+  SA_NAME: ${{ secrets.SA_NAME }}
+  INSTANCE: ${{ secrets.CONNECTION }}
+  DATABASE_NAME: ${{ secrets.DATABASE_NAME }}
+  DB_USER: ${{ secrets.DB_USER }}
+  DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+  CONN: "${{ secrets.GCP_PROJECT_ID }}:europe-west1:${{ secrets.CONNECTION }}" 
+
+jobs:
+  build-deploy:
+    name: Build and Deploy
+    runs-on: ubuntu-latest
+
+    steps:
+    # Checkout the repository code
+    - name: Checkout
+      uses: actions/checkout@v2
+    
+    # Set the java-version to use
+    - name: Set up JDK 11
+      uses: actions/setup-java@v1
+      with:
+        java-version: 11
+    
+    # Build the jar file with maven
+    - name: Build with Maven
+      run: |-
+        cd services
+        mvn -B package --file pom.xml -Pprod -Dmaven.test.skip=true
+    
+    # Cache the maven dependencies to .m2 directory
+    - name: Cache local Maven repository
+      uses: actions/cache@v2
+      with:
+        path: ~/.m2/repository/visitcount
+        key: ${{ runner.os }}-maven-${{ hashFiles('**/pom.xml') }}
+        restore-keys: |
+          ${{ runner.os }}-maven-
+    
+    # Setup gcloud CLI
+    - name: Setup gcloud CLI
+      uses: google-github-actions/setup-gcloud@master
+      with:
+        service_account_key: ${{ secrets.SA_KEY }}
+        project_id: ${{ secrets.GCP_PROJECT_ID }}
+        export_default_credentials: true
+
+    # Enable required API's in the project
+    - name: Enable API's
+      run: |-
+        gcloud services enable serviceusage.googleapis.com  logging.googleapis.com sql-component.googleapis.com cloudresourcemanager.googleapis.com run.googleapis.com sqladmin.googleapis.com containerregistry.googleapis.com
+    
+    # Register gcloud as Docker Credential Helper
+    - name: Configure Docker and Install Beta
+      run: |-
+        gcloud auth configure-docker --quiet
+        gcloud components install beta
+    
+    # Pull previously pushed stages(if any), Build the Docker image using cache and push it to registry
+    - name: Build docker image with cache
+      uses: whoan/docker-build-with-cache-action@v5
+      with:
+        username: _json_key
+        password: ${{ secrets.SA_KEY }}
+        registry: gcr.io
+        image_name: gcp-sb-training-app
+        dockerfile: services/Dockerfile
+
+    # Spin up mysql instance, create database in it and a user to manage. gcloud gives error in case instance alraedy exists, so continue-on-error is set as true
+    - name: Setup Cloud SQL
+      continue-on-error: true
+      run: |- 
+       gcloud sql instances create $INSTANCE  --database-version=MYSQL_5_7 --tier=db-n1-standard-1  --region=europe-west1 --root-password=$DB_PASSWORD
+       gcloud sql databases create $DATABASE_NAME --instance=$INSTANCE
+       gcloud sql users create $DB_USER --instance=$INSTANCE --password=$DB_PASSWORD
+     
+    # Deploy backend to Cloud Run and add IAM Bindings, SQL instance to service deployed
+    - name: Deploy Spring Boot to Cloud Run
+      run: |-
+        cd services
+        sed -i "s/SA_NAME/$SA_NAME/g" spring-boot-run.yaml
+        sed -i "s/GCP_PROJECT/$GCP_PROJECT/g" spring-boot-run.yaml
+        sed -i "s/DATABASE_CONNECTION/$CONN/g" spring-boot-run.yaml
+        sed -i "s/DB_NAME/$DATABASE_NAME/g" spring-boot-run.yaml
+        sed -i "s/USERNAME/$DB_USER/g" spring-boot-run.yaml
+        sed -i "s/PASS_DB/$DB_PASSWORD/g" spring-boot-run.yaml
+        gcloud beta run services replace spring-boot-run.yaml  --platform=managed --region=europe-west1
+        gcloud run services update $BACKEND_SERVICE_NAME --quiet --set-cloudsql-instances=$INSTANCE --platform=managed --region=europe-west1
+        gcloud run services add-iam-policy-binding $BACKEND_SERVICE_NAME --platform=managed --region=europe-west1 --member="allUsers" --role="roles/run.invoker"
+    
+    # Build Docker Image of React Based front end
+    - name: React App - Build Docker image
+      run: |-
+        cd ui/
+        BACK_URL=$(gcloud run services describe $BACKEND_SERVICE_NAME --platform managed --region europe-west1 --format 'value(status.url)')
+        docker build --build-arg URL=$BACK_URL -t gcr.io/$GCP_PROJECT/react-app .
+        docker push gcr.io/$GCP_PROJECT/react-app
+
+    # Deploy the docker image created in previous step to Cloud Run
+    - name: Deploy React App to Cloud Run
+      run: |-
+        cd ui
+        sed -i "s/SA_NAME/$SA_NAME/g" react-run.yaml
+        sed -i "s/GCP_PROJECT/$GCP_PROJECT/g" react-run.yaml
+        gcloud beta run services replace react-run.yaml  --platform=managed --region=europe-west1
+        gcloud run services add-iam-policy-binding $FRONTEND_SERVICE_NAME --platform=managed --region=europe-west1 --member="allUsers" --role="roles/run.invoker"
